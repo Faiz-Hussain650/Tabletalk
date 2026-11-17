@@ -1,7 +1,7 @@
 """Menu, order and cart models.
 
-Key design rule: the LLM never holds the order in its head and never computes prices.
-The Cart below is the single source of truth, and the model can only change it through tools.
+The cart is the source of truth for the order. The model only changes it through
+tools, and all prices/totals are calculated here.
 """
 
 from __future__ import annotations

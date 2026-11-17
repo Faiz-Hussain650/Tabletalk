@@ -32,7 +32,7 @@
 </head>
 <body>
 <header>
-  <h1>🍕 Nonna's Kitchen · TableTalk</h1>
+  <h1>Nonna's Kitchen · TableTalk</h1>
   <a href="/kitchen" target="_blank">Kitchen display →</a>
 </header>
 <main>
@@ -78,7 +78,7 @@ function renderCart(cart) {
   else for (const li of cart.items) {
     const e = document.createElement('li');
     const mods = li.modifiers.length ? ' (' + li.modifiers.map(m => m.replaceAll('_',' ')).join(', ') + ')' : '';
-    e.textContent = `${li.quantity}× ${li.size ? li.size + ' ' : ''}${li.name}${mods} — €${li.line_total.toFixed(2)}`;
+    e.textContent = `${li.quantity}× ${li.size ? li.size + ' ' : ''}${li.name}${mods} - €${li.line_total.toFixed(2)}`;
     ul.appendChild(e);
   }
   document.getElementById('total').textContent = cart && cart.items && cart.items.length ? `Total €${cart.total.toFixed(2)}` : '';
@@ -121,9 +121,10 @@ async function recStart() {
     recorder.onstop = async () => {
       stream.getTracks().forEach(t => t.stop());
       const blob = new Blob(chunks, {type: recorder.mimeType});
+      if (blob.size < 1000) { meta('Too short - hold the button while you speak.'); return; }
       if (ws && ws.readyState === 1) ws.send(await blob.arrayBuffer());
     };
-    recorder.start(); mic.classList.add('rec'); mic.textContent = '● Recording';
+    recorder.start(250); mic.classList.add('rec'); mic.textContent = '● Recording';
   } catch (err) { meta('Microphone not available: ' + err); }
 }
 function recStop() {

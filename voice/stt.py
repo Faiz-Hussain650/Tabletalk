@@ -42,14 +42,30 @@ def clean_transcript(text: str) -> str:
 
 
 def decode_audio_bytes(data: bytes) -> np.ndarray:
-    """Any audio format (webm, m4a, wav...) -> float32 mono 16 kHz, using ffmpeg."""
-    proc = subprocess.run(
-        ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", "pipe:0", "-f", "f32le", "-ac", "1",
-         "-ar", str(SAMPLE_RATE), "pipe:1"],
-        input=data,
-        capture_output=True,
-        check=True,
-    )
+    """Any audio format (webm from Chrome, mp4 from Safari, wav...) -> float32 mono 16 kHz.
+
+    We write to a temp file instead of piping: mp4/m4a files keep their index at the END,
+    so ffmpeg must be able to seek, which a pipe can't do.
+    """
+    import os
+    import tempfile
+
+    if len(data) < 1000:  # an empty or tiny recording (button released too fast)
+        return np.zeros(0, dtype=np.float32)
+    with tempfile.NamedTemporaryFile(suffix=".audio", delete=False) as f:
+        f.write(data)
+        tmp = f.name
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", tmp, "-f", "f32le", "-ac", "1",
+             "-ar", str(SAMPLE_RATE), "pipe:1"],
+            capture_output=True,
+        )
+    finally:
+        os.unlink(tmp)
+    if proc.returncode != 0:
+        print(f"[stt] could not decode audio ({len(data)} bytes): {proc.stderr.decode(errors='ignore')[-200:]}")
+        return np.zeros(0, dtype=np.float32)
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
 

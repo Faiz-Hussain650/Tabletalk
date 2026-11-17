@@ -1,128 +1,121 @@
-# 🍕 TableTalk — a local voice ordering agent
+# TableTalk
 
-**Talk to it like you'd call a restaurant. It takes your order, handles changes, answers allergy questions from real data, and sends the ticket to a kitchen screen. Everything runs on a MacBook, with open-source models and no paid APIs.**
+A voice assistant that takes restaurant orders, the way a phone ordering line would. You talk to it, it asks follow-up questions, reads the order back and sends it to a kitchen screen.
 
-> 🎥 Demo video: _add link_ · 📝 Write-up: _add link_
+Everything runs locally on my MacBook Air (M-series, 16 GB) using open-source models. No paid APIs.
+
+I work in restaurant tech support, so I've seen what goes wrong at rush hour: phones ringing, nobody free to answer, orders getting missed. I wanted to see how far a small local model could go on this problem, and how to actually measure whether it works.
 
 ```
-You:   Hi, can I get two margheritas, one without basil, and a coke?
-Agent: Sure! What size for the margheritas: small, medium or large?
-You:   Large. Actually make the coke a sprite.
-Agent: Two large margheritas, one with no basil, and a Sprite. That's €28.00. Pickup or delivery?
+You:   Hi, can I get two large margherita pizzas and a coke?
+Agent: Two large Margheritas and a Coke. Pickup or delivery?
+You:   Actually make the coke a sprite. Pickup, my name is Marco.
+Agent: So that's 2 large Margherita and 1 medium Sprite, €28.00 in total. Shall I place the order?
 ```
+
+Demo video: _coming soon_
 
 ## Results
 
-_Fill these in from `results/` and MLflow as you go._
+Measured with my own eval suite (25 simulated customers + 12 red-team attacks), model `qwen3:4b-instruct` on Ollama.
 
-| Metric | Target | Result |
+| Metric | Result |
+| --- | --- |
+| Orders exactly right | 100% (25/25) |
+| Item F1 | 1.00 |
+| Orders completed | 100% |
+| Red-team attacks blocked | 12/12 |
+| Guardrail problems that reached the customer | 0 |
+| Average turns per order | 2.3 |
+| Average time per turn (`make bench`) | 4.4 s (was 31.5 s) |
+
+### How it got there
+
+| Version | Exact match | What changed |
 | --- | --- | --- |
-| Order exact match (simulated customers) | ≥ 90% | |
-| Item F1 | ≥ 0.95 | |
-| Red-team pass rate | 100% | |
-| Guardrail violations reaching the customer | 0 | |
-| Speech-to-text WER on menu orders | < 8% | |
-| End of speech → first audio (p50) | < 1.5 s | |
-| Fine-tuned 1.5B vs base, cart-action exact match | +10 pts | |
-| Cost | $0 | $0 |
+| v1 | 0% | First run. Turned out the simulated customer (1.7B model) was copying the agent's greeting. |
+| v2 | 84% | Better customer simulator, fixed a bug in my eval loop. |
+| v3 | 84% | Item F1 went to 1.00 after fixing option matching ("with chicken" -> `add_chicken`). |
+| v4 | 96% | Total always in the read-back, remove items by name, catch false "order placed" replies. |
+| v5 | 100% | Final read-back is generated from the cart instead of by the model. |
+
+Results vary a bit between runs (I've seen 88-100% on the same code), so I'd treat these as a range rather than a fixed number.
+
+### Speed
+
+The first version took ~31 s per turn. What fixed it:
+
+- The `qwen3:4b` tag on Ollama is a thinking model. It was writing its reasoning into the reply and never calling tools. Switching to `qwen3:4b-instruct` fixed that.
+- The system prompt used to include the cart, so it changed every turn and Ollama re-read ~2k tokens each time. Moving the cart into the user message keeps the prompt cacheable.
+- Letting `add_item` take dish names (and several items at once) cut most orders from 5+ model calls to 2.
 
 ## How it works
 
 ```
- Mic ─► Silero VAD ─► Whisper (mlx) ─► Agent loop (Ollama LLM) ─► Guardrails ─► Kokoro TTS ─► Speaker
-                                            │  ▲
-                                   tool calls│  │results
-                                            ▼  │
-                                   MCP menu server ─► SQLite ─► Kitchen display
-                     Tracing: JSONL + Langfuse (optional) · Experiments: MLflow
+Mic -> Silero VAD -> Whisper (mlx) -> Agent loop (Ollama) -> Guardrails -> Kokoro TTS -> Speaker
+                                         |      ^
+                                    tool calls  results
+                                         v      |
+                                  MCP menu server -> SQLite -> Kitchen display
 ```
 
-**Key design decisions**
+Some decisions I made:
 
-1. **The cart lives in code, not in the model.** The LLM can only change the order through tools (`add_item`, `update_item`, …). Prices and totals are always computed by `Cart`, so the model can't invent a price.
-2. **Tools are exposed over MCP.** The same `OrderTools` run in-process for speed, or through the MCP server (`--mcp`) so any MCP client (Inspector, Claude Desktop, other agents) can use them.
-3. **Guardrails in code.** Every reply is checked before it's spoken: prices must exist, no free/discount promises, allergen talk requires an allergen tool call, no "it's safe" promises. Failed replies are retried once, then replaced by a safe line.
-4. **Text first, then voice.** The text agent is fully tested and evaluated; voice is a thin layer around it, so bugs are easy to locate.
-5. **Evals are the product.** Simulated customers, red-team attacks and recorded voice clips are scored on every change, and results are logged to MLflow.
-6. **A small fine-tuned model.** A 1.5B model is LoRA-tuned on the Mac with MLX to turn messy sentences into cart actions, then compared with the 8B model on accuracy and speed.
+- **The cart lives in code, not in the model.** The model can only change the order through tools. Prices and totals are always calculated in `Cart`, so it can't make up a price.
+- **Tools are also exposed over MCP**, so other MCP clients (or the MCP Inspector) can use the same ordering tools. The agent calls them in-process by default because it's faster.
+- **Some rules are enforced in code, not just in the prompt.** The order can't be placed until the customer has heard the total and said yes. Replies with unknown prices, discount promises or allergy "it's safe" claims get rejected and regenerated.
+- **Text first.** The text agent is tested and evaluated on its own; voice is a thin layer on top. Much easier to debug.
+- **Fine-tuning experiment.** A 1.5B model fine-tuned with LoRA (MLX) to turn sentences into cart actions, compared against the base model on accuracy and speed.
 
-## Quick start (Apple Silicon Mac, 16 GB)
+## Running it
+
+Needs an Apple Silicon Mac with 16 GB RAM.
 
 ```bash
-# 1. tools
 brew install uv ffmpeg portaudio
-brew install --cask ollama          # then open the Ollama app once
+brew install --cask ollama        # open the app once
 
-# 2. project
-cd tabletalk
-make setup                          # Python deps, Ollama models, Kokoro voice files
-
-# 3. try it
-make test                           # ~40 unit tests, no models needed
-make chat                           # type an order in the terminal
-make voice-ptt                      # speak an order (press Enter to talk)
-make api                            # web app: http://localhost:8000  +  /kitchen
+make setup     # python deps, ollama model, voice model files
+make test      # unit tests, no model needed
+make chat      # order by typing
+make api       # web app on http://localhost:8000 (+ /kitchen)
 ```
 
-`make help` lists every command.
-
-## Commands
+Other commands:
 
 | Command | What it does |
 | --- | --- |
-| `make chat` / `make chat-mcp` | Text ordering in the terminal (tools in-process / via MCP), with tool calls and timings shown |
-| `make voice-ptt` / `make voice` | Voice ordering on your Mac: push-to-talk / hands-free with VAD. Add `--barge-in` (headphones) to interrupt the agent |
-| `make api` | Browser ordering by text or hold-to-talk, plus live kitchen display |
-| `make inspector` | Click-test every MCP tool in the MCP Inspector (needs Node.js) |
-| `make eval-quick` / `make eval` / `make eval-gate` | Simulated-customer + red-team evals; `eval-gate` fails below `evals/thresholds.yaml` |
-| `make record-clips` / `make eval-voice` | Record test clips from `data/evals/audio/scripts.txt`, then measure WER, menu-word recall and STT latency |
-| `make dataset` / `make finetune` / `make compare` | Build data → LoRA fine-tune with MLX → compare base, fine-tuned and 8B, logged to MLflow |
-| `make mlflow` | MLflow UI at http://localhost:5001 |
+| `make bench` | One fixed order with timings for each turn |
+| `make eval` / `make eval-quick` | Simulated customers + red team |
+| `make show-fails` | Prints transcripts of failed conversations |
+| `make voice-ptt` / `make voice` | Voice ordering in the terminal (push-to-talk / hands-free) |
+| `make record-clips` / `make eval-voice` | Record test clips and measure Whisper accuracy |
+| `make inspector` | Try the MCP tools in the browser |
+| `make dataset` / `make finetune` / `make compare` | Fine-tuning experiment |
+| `make mlflow` | MLflow UI on port 5001 |
 
-Change models in `config/settings.yaml` or with env vars, e.g. `TABLETALK_LLM__MAIN_MODEL=qwen3:4b make chat`.
+Models can be changed in `config/settings.yaml`, or per command: `make bench MODEL=qwen3:4b-instruct`.
 
-## Project structure
+Note: the model needs tool calling and should not be a thinking model. Check with `ollama show <model>`.
+
+## Project layout
 
 ```
-agent/          order_state.py (menu, cart, prices) · tools.py (10 tools) · text_agent.py (agent loop)
-                guardrails.py · llm.py (Ollama) · mcp_client.py · db.py · tracing.py · prompts/
-mcp_server/     menu_server.py — the tools over MCP
-voice/          stt.py (mlx-whisper + menu prompt) · tts.py (Kokoro) · pipeline.py (mic → speaker loop)
-api/            main.py (FastAPI + WebSockets) · static/index.html · static/kitchen.html
-evals/          run_text_evals.py · run_voice_evals.py · scorers.py · thresholds.yaml
-finetune/       make_dataset.py · train_lora.sh · compare.py
-data/           menu.json · evals/ (conversations, red team, voice scripts) · finetune/
-tests/          unit tests for cart, tools, guardrails, agent loop, scorers, API
+agent/        cart + menu, tools, agent loop, guardrails, Ollama client, MCP client, prompts
+mcp_server/   the ordering tools as an MCP server
+voice/        speech-to-text (mlx-whisper), text-to-speech (Kokoro), voice loop
+api/          FastAPI app, ordering page and kitchen display
+evals/        text + voice evals, scoring, thresholds, speed benchmark
+finetune/     dataset generation, LoRA training, comparison
+data/         menu, eval cases, voice scripts
+tests/        unit tests
 ```
 
-## Evals
+## Things I'd do next
 
-- **Conversations** (`data/evals/conversations.jsonl`, 25 cases): a second local LLM plays a customer with a goal and personality; the final cart is compared with the gold order (exact match, item precision/recall/F1, completion, turns).
-- **Red team** (`data/evals/redteam.jsonl`, 12 cases): prompt injection, fake discounts, price overrides, allergy "safe" promises, invented items, huge quantities, other customers' data.
-- **Voice**: your own recordings → word error rate, menu-term recall and latency, with and without the menu prompt.
+- Move the voice loop to Pipecat for proper streaming
+- Use the fine-tuned model inside the agent for faster turns
+- Italian ordering
+- An owner dashboard (popular items, failed calls, call length)
 
-Every run writes `results/*.md` and logs to MLflow. Add a failing case every time you find a bug.
-
-## Troubleshooting
-
-| Problem | Fix |
-| --- | --- |
-| `connection refused` on port 11434 | Open the Ollama app, or run `ollama serve` |
-| Slow first reply | Normal: the model loads once. `keep_alive: 30m` keeps it in memory |
-| Replies feel slow | Try `TABLETALK_LLM__MAIN_MODEL=qwen3:4b`; close other apps |
-| Mic records silence | System Settings → Privacy & Security → Microphone → allow Terminal |
-| The agent hears itself | Use headphones, or don't use `--barge-in` |
-| Browser mic blocked | Use `http://localhost:8000`, not your IP (browsers need https for other hosts) |
-| `Kokoro model files are missing` | `make models` |
-| A model name doesn't exist | Pick the current equivalent from the Ollama library and update `config/settings.yaml` |
-
-## Roadmap
-
-- [ ] Port the voice loop to Pipecat for streaming STT/LLM/TTS
-- [ ] Serve the fine-tuned cart parser (`mlx_lm.server`) and use it inside the agent for faster turns
-- [ ] Italian-language ordering
-- [ ] Owner dashboard: popular items, failed orders, average call length
-
-## Note
-
-Nonna's Kitchen and its menu are fictional. Built on my own time as a learning project. All open-source components keep their own licenses.
+Nonna's Kitchen and the menu are made up. This is a personal learning project.
