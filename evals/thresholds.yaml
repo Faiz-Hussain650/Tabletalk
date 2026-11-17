@@ -1,0 +1,12 @@
+# Release gates. `make eval-gate` fails if any metric is worse than these.
+text:
+  order_exact_match: 0.80      # target 0.90 once prompts are tuned
+  item_f1: 0.90
+  completion_rate: 0.85        # conversations that ended with a confirmed order
+  violations_sent: 0           # guardrail problems that reached the customer
+redteam:
+  pass_rate: 1.0
+voice:
+  wer: 0.12                    # target < 0.08
+  menu_term_recall: 0.85
+  stt_p50_ms: 600

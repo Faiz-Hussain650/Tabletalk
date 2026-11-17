@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TableTalk · Nonna's Kitchen</title>
+<style>
+  :root { --bg:#faf7f2; --card:#fff; --ink:#222; --muted:#777; --accent:#b8402f; --line:#e7e1d8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+  header h1 { font-size:18px; margin:0; }
+  header a { color:var(--accent); font-size:14px; }
+  main { display:grid; grid-template-columns: 1fr 320px; gap:16px; padding:16px; max-width:1100px; margin:0 auto; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  #log { height:60vh; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:80%; padding:10px 14px; border-radius:14px; line-height:1.4; }
+  .agent { background:#f1ece4; align-self:flex-start; }
+  .user { background:var(--accent); color:#fff; align-self:flex-end; }
+  .meta { font-size:11px; color:var(--muted); align-self:flex-start; }
+  form { display:flex; gap:8px; margin-top:12px; }
+  input { flex:1; padding:12px; border-radius:10px; border:1px solid var(--line); font-size:15px; }
+  button { padding:12px 16px; border-radius:10px; border:0; background:var(--accent); color:#fff; font-size:15px; cursor:pointer; }
+  button.secondary { background:#444; }
+  button.rec { background:#1f7a3a; }
+  #cart h2 { font-size:16px; margin:0 0 8px; }
+  #cart ul { padding-left:18px; margin:0; }
+  #total { font-weight:700; margin-top:10px; }
+  #status { font-size:13px; color:var(--muted); margin-top:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍕 Nonna's Kitchen · TableTalk</h1>
+  <a href="/kitchen" target="_blank">Kitchen display →</a>
+</header>
+<main>
+  <section class="card">
+    <div id="log"></div>
+    <form id="f">
+      <input id="t" placeholder="Type your order, or hold the mic button to speak…" autocomplete="off">
+      <button type="submit">Send</button>
+      <button type="button" id="mic" class="secondary" title="Hold to talk">🎤 Hold</button>
+    </form>
+    <div style="margin-top:8px"><button type="button" class="secondary" id="reset">New order</button></div>
+  </section>
+  <aside class="card" id="cart">
+    <h2>Your order</h2>
+    <ul id="items"><li style="color:#999">Empty</li></ul>
+    <div id="total"></div>
+    <div id="status"></div>
+  </aside>
+</main>
+<script>
+let sessionId = null, ws = null, recorder = null, chunks = [];
+const audioQueue = []; let playing = false;
+function playNext() {
+  if (playing || !audioQueue.length) return;
+  playing = true;
+  const a = new Audio('data:audio/wav;base64,' + audioQueue.shift());
+  a.onended = a.onerror = () => { playing = false; playNext(); };
+  a.play().catch(() => { playing = false; playNext(); });
+}
+const log = document.getElementById('log');
+
+function add(text, cls) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+function meta(text) {
+  const d = document.createElement('div'); d.className = 'meta'; d.textContent = text;
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+function renderCart(cart) {
+  const ul = document.getElementById('items'); ul.innerHTML = '';
+  if (!cart || !cart.items || !cart.items.length) { ul.innerHTML = '<li style="color:#999">Empty</li>'; }
+  else for (const li of cart.items) {
+    const e = document.createElement('li');
+    const mods = li.modifiers.length ? ' (' + li.modifiers.map(m => m.replaceAll('_',' ')).join(', ') + ')' : '';
+    e.textContent = `${li.quantity}× ${li.size ? li.size + ' ' : ''}${li.name}${mods} — €${li.line_total.toFixed(2)}`;
+    ul.appendChild(e);
+  }
+  document.getElementById('total').textContent = cart && cart.items && cart.items.length ? `Total €${cart.total.toFixed(2)}` : '';
+  document.getElementById('status').textContent = cart && cart.status === 'confirmed'
+    ? `✅ Confirmed for ${cart.customer_name} (${cart.fulfilment})` : '';
+}
+async function start() {
+  log.innerHTML = ''; renderCart(null);
+  const r = await fetch('/api/session', {method: 'POST'}); const j = await r.json();
+  sessionId = j.session_id; add(j.greeting, 'agent');
+  if (ws) ws.close();
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/voice/${sessionId}`);
+  ws.onmessage = (ev) => {
+    const j = JSON.parse(ev.data);
+    if (j.error) { meta(j.error); return; }
+    if (j.audio_b64) { audioQueue.push(j.audio_b64); playNext(); return; }
+    if (j.first_audio_ms) { meta(`first audio after ${j.first_audio_ms}ms`); return; }
+    if (j.transcript) add(j.transcript, 'user');
+    add(j.reply, 'agent'); if (j.cart) renderCart(j.cart);
+    if (j.timings) meta(`stt ${j.timings.stt_ms}ms · agent ${j.timings.agent_ms}ms`);
+  };
+}
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const t = document.getElementById('t'); const text = t.value.trim(); if (!text) return;
+  t.value = ''; add(text, 'user');
+  const r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({session_id: sessionId, text})});
+  const j = await r.json(); add(j.reply, 'agent'); renderCart(j.cart);
+  meta(`agent ${j.timings.total_ms}ms · ${j.tool_calls.map(c => c.name).join(', ') || 'no tools'}`);
+};
+document.getElementById('reset').onclick = start;
+
+const mic = document.getElementById('mic');
+async function recStart() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    recorder = new MediaRecorder(stream); chunks = [];
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, {type: recorder.mimeType});
+      if (ws && ws.readyState === 1) ws.send(await blob.arrayBuffer());
+    };
+    recorder.start(); mic.classList.add('rec'); mic.textContent = '● Recording';
+  } catch (err) { meta('Microphone not available: ' + err); }
+}
+function recStop() {
+  if (recorder && recorder.state === 'recording') recorder.stop();
+  mic.classList.remove('rec'); mic.textContent = '🎤 Hold';
+}
+mic.addEventListener('mousedown', recStart); mic.addEventListener('mouseup', recStop);
+mic.addEventListener('touchstart', e => { e.preventDefault(); recStart(); });
+mic.addEventListener('touchend', e => { e.preventDefault(); recStop(); });
+start();
+</script>
+</body>
+</html>

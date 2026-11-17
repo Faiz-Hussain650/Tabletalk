@@ -1,0 +1,28 @@
+# Optional services. The app itself runs natively on your Mac (Ollama, MLX and audio need the host).
+#
+#   make up     -> MLflow tracking server at http://localhost:5000
+#                  then set mlflow.tracking_uri: http://localhost:5000 in config/settings.yaml
+#
+# Langfuse (LLM tracing) has its own official self-hosting setup with several services.
+# Run it from their repo (free, local):
+#   git clone https://github.com/langfuse/langfuse.git ../langfuse
+#   cd ../langfuse && docker compose up -d        # UI at http://localhost:3000
+# Create a project in the UI, then export in your shell before running TableTalk:
+#   export LANGFUSE_HOST=http://localhost:3000 LANGFUSE_PUBLIC_KEY=pk-... LANGFUSE_SECRET_KEY=sk-...
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.17.2
+    command: >
+      mlflow server
+      --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --serve-artifacts
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+
+volumes:
+  mlflow-data:

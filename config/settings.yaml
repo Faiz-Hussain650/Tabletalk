@@ -1,0 +1,47 @@
+# TableTalk settings. Any value can be overridden with an environment variable,
+# e.g. TABLETALK_LLM__MAIN_MODEL=qwen3:4b  (double underscore = nested key).
+
+restaurant: "Nonna's Kitchen"
+
+paths:
+  menu: data/menu.json
+  db: data/tabletalk.db
+  traces: traces
+  prompts: agent/prompts
+
+llm:
+  host: http://localhost:11434
+  main_model: qwen3:4b-instruct  # needs tool calling and must NOT be a "thinking" model (check: ollama show)
+  sim_model: qwen3:4b-instruct  # plays the customer in evals (same model = no extra memory)
+  temperature: 0.2
+  keep_alive: 30m             # keep the model loaded = faster first token
+  max_tool_rounds: 6
+  num_ctx: 8192              # context window; the default can be too small for prompt + tools + chat
+  prompt_version: v2        # v2 = fast: static system prompt, dish names in tools, parallel add_item
+
+stt:
+  model: mlx-community/whisper-small-mlx   # try mlx-community/whisper-large-v3-turbo for accuracy
+  language: en
+  use_menu_prompt: true
+
+tts:
+  model_path: models/kokoro-v1.0.onnx
+  voices_path: models/voices-v1.0.bin
+  voice: af_heart
+  speed: 1.05
+  lang: en-us
+
+vad:
+  sample_rate: 16000
+  threshold: 0.5
+  min_silence_ms: 500
+
+latency_budget_ms:
+  stt: 400
+  llm: 900
+  tts_first_audio: 300
+  total: 1500
+
+mlflow:
+  tracking_uri: sqlite:///mlflow.db   # or http://localhost:5000 with `make up`
+  experiment: tabletalk

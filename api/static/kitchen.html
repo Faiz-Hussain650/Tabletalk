@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen Display · TableTalk</title>
+<style>
+  body { margin:0; font-family: -apple-system, system-ui, sans-serif; background:#1b1b1d; color:#eee; }
+  header { padding:14px 20px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; }
+  h1 { font-size:18px; margin:0; }
+  #clock { color:#aaa; font-variant-numeric: tabular-nums; }
+  #board { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:14px; padding:16px; }
+  .ticket { background:#2a2a2e; border-radius:10px; padding:14px; border-top:6px solid #e0a030; }
+  .ticket.preparing { border-top-color:#3b82f6; }
+  .ticket.ready { border-top-color:#22c55e; }
+  .head { display:flex; justify-content:space-between; font-weight:700; margin-bottom:6px; }
+  .sub { color:#aaa; font-size:13px; margin-bottom:10px; }
+  ul { margin:0 0 12px; padding-left:18px; line-height:1.6; }
+  .mods { color:#f5b971; font-size:13px; }
+  .btns { display:flex; gap:6px; }
+  button { flex:1; padding:8px; border:0; border-radius:8px; cursor:pointer; font-weight:600; }
+  .b-prep { background:#3b82f6; color:#fff; } .b-ready { background:#22c55e; color:#111; } .b-done { background:#555; color:#fff; }
+  .empty { color:#777; padding:40px; text-align:center; grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<header><h1>👩‍🍳 Kitchen Display — Nonna's Kitchen</h1><span id="clock"></span></header>
+<div id="board"><div class="empty">Waiting for orders…</div></div>
+<script>
+const board = document.getElementById('board');
+function age(iso) { const m = Math.floor((Date.now() - new Date(iso)) / 60000); return m < 1 ? 'just now' : m + ' min ago'; }
+function render(orders) {
+  board.innerHTML = '';
+  if (!orders.length) { board.innerHTML = '<div class="empty">Waiting for orders…</div>'; return; }
+  for (const o of orders) {
+    const t = document.createElement('div'); t.className = 'ticket ' + o.status;
+    const items = o.items.map(i => {
+      const mods = i.modifiers.length ? `<div class="mods">${i.modifiers.map(m => m.replaceAll('_',' ')).join(', ')}</div>` : '';
+      return `<li><b>${i.quantity}×</b> ${i.size ? i.size + ' ' : ''}${i.name}${mods}</li>`;
+    }).join('');
+    t.innerHTML = `<div class="head"><span>#${o.id} · ${o.customer_name || ''}</span><span>€${o.total.toFixed(2)}</span></div>
+      <div class="sub">${(o.fulfilment || '').toUpperCase()} · ${age(o.created_at)} · ${o.status}</div>
+      <ul>${items}</ul>
+      <div class="btns">
+        <button class="b-prep" onclick="setStatus(${o.id},'preparing')">Start</button>
+        <button class="b-ready" onclick="setStatus(${o.id},'ready')">Ready</button>
+        <button class="b-done" onclick="setStatus(${o.id},'done')">Done</button>
+      </div>`;
+    board.appendChild(t);
+  }
+}
+async function setStatus(id, s) { await fetch(`/api/orders/${id}/status/${s}`, {method:'POST'}); }
+function connect() {
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/kitchen`);
+  ws.onmessage = e => render(JSON.parse(e.data));
+  ws.onclose = () => setTimeout(connect, 2000);
+}
+setInterval(() => document.getElementById('clock').textContent = new Date().toLocaleTimeString(), 1000);
+connect();
+</script>
+</body>
+</html>
